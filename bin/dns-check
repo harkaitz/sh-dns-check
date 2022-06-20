@@ -1,0 +1,129 @@
+#!/bin/sh -e
+#L:
+#L:  MIT License
+#L:  
+#l:  Bug reports, feature requests to gemini|https://harkadev.com/oss
+#l:  Copyright (c) 2022 Harkaitz Agirre, harkaitz.aguirre@gmail.com
+#L:
+#L:  Permission is hereby granted, free of charge, to any person obtaining
+#L:  a copy of this software and associated documentation files (the
+#L:  "Software"), to deal in the Software without restriction, including
+#L:  without limitation the rights to use, copy, modify, merge, publish,
+#L:  distribute, sublicense, and/or sell copies of the Software, and to
+#L:  permit persons to whom the Software is furnished to do so, subject to
+#L:  the following conditions:
+#L:
+#L:  The above copyright notice and this permission notice shall be
+#L:  included in all copies or substantial portions of the Software.
+#L:
+#L:  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+#L:  EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+#L:  MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+#L:  NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+#L:  LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+#L:  OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+#L:  WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+#h: Usage: $0 ...
+#h:
+#h: This script helps checking out whether the DNS configuration of sites
+#h: is okey. By default it uses 8.8.4.4, you can overwrite it by setting
+#h: the DNS_SERVER environment variable.
+#h:
+#h: ... smtp DOMAIN  : Get SMTP server's hostname for DOMAIN.
+#h: ... rdns IPADDR  : Get Domain for IP address.
+#h: ... www  DOMAIN  : Get IP for DOMAIN and www.DOMAIN, check are equal and print.
+#h: ... public-ip    : Get public IP.
+#h: ... rping HOST   : Resolve using 'ping'. This takes into account /etc/hosts.
+dns_check() {
+    local cmd="$1"
+    shift
+    case "${cmd}" in
+        smtp)      dns_check_smtp "$@"      ;;
+        rdns)      dns_check_rdns "$@"      ;;
+        www)       dns_check_www  "$@"      ;;
+        public-ip) dns_check_public_ip      ;;
+        rping)     dns_check_rping "$@"     ;;
+        *)         dns_check_error "Invalid argument ${cmd}."; return 1;;
+    esac
+}
+## -----------------------------------------------------------------------------
+dns_check_smtp() {
+    if ! which host >/dev/null 2>&1; then
+        dns_check_error 'Program "host" not found.'
+        return 1
+    elif test ! -n "${1}"; then
+        dns_check_error 'Please specify a domain.'
+        return 1
+    fi
+    local sed='s|.* mail is handled by [0-9][0-9]* \([^ ]*\)\.$|\1|p'
+    local smtp="`LANG=C host "${1}" "${DNS_SERVER}" | sed -n "${sed}"`"
+    if test ! -n "${smtp}"; then
+        dns_check_error "Failed getting the SMTP server."
+        return 1
+    fi
+    echo "${smtp}"
+}
+dns_check_rdns() {
+    if test ! -n "$1"; then
+        dns_check_error "Please specify an IP address."
+        return 1
+    fi
+    dig +noall +answer -x "${1}" \
+        | awk '{print $5}' \
+        | sed 's|\.$||'
+}
+dns_check_www() {
+    if ! which host >/dev/null 2>&1; then
+        dns_check_error 'Program "host" not found.'
+        return 1
+    elif test ! -n "${1}"; then
+        dns_check_error 'Please specify a domain.'
+        return 1
+    fi
+    local sed='s|.*has address *||p'
+    local ip1="`LANG=C host     "${1}" "${DNS_SERVER}" | sed -n "${sed}"`"
+    local ip2="`LANG=C host "www.${1}" "${DNS_SERVER}" | sed -n "${cmd}"`"
+    if test ! @"${ip1}" = @"${ip2}"; then
+        echo "${SCRNAME}: error: ${1} has ${ip1}, www.${1} has ${ip2}." >&2
+        return 1
+    fi
+    echo "${ip1}"
+}
+dns_check_public_ip() {
+    if ! which dig >/dev/null 2>&1; then
+        dns_check_error 'Program "dig" not found.'
+        return 1
+    fi
+    local ip="`dig +short myip.opendns.com @resolver1.opendns.com`"
+    test -n "${ip}"
+    echo "${ip}"
+}
+dns_check_rping() {
+    if ! which ping >/dev/null 2>&1; then
+        dns_check_error 'Program "ping" not found.'
+        return 1
+    elif test ! -n "${1}"; then
+        dns_check_error 'Please specify a hostname.'
+        return 1
+    fi
+    local sed='1s|^[^(]*(\([^)]*\)).*|\1|p'
+    local ip="`ping -c 1 "${1}" | sed -n "${sed}" | head -n 1`"
+    test -n "${ip}"
+    echo "${ip}"
+}
+## -----------------------------------------------------------------------------
+dns_check_error() {
+    echo "${SCRNAME}: error: $*" >&2
+}
+## -----------------------------------------------------------------------------
+SCRNAME="`basename "$0"`"
+DNS_SERVER="${DNS_SERVER:-8.8.4.4}"
+if test @"${SCRNAME}" = @"dns-check";then
+    if test -n "$1";then
+        dns_check "$@"
+    else
+        sed -n 's/^ *#h: \{0,1\}//p' "$0" | sed "s|\\\$0|`basename $0`|g"
+        echo ""
+        sed -n 's/^ *#l: \{0,2\}//p' "$0"
+    fi
+fi
